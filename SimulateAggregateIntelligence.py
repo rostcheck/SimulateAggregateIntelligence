@@ -11,18 +11,19 @@ class Task:
 
 
 class WorkerNode:
-    def __init__(self, env, node_id, worker_max_operations, operation_range):
+    def __init__(self, env, node_id):
+        self.env = env
         self.node_id = node_id
         self.operations = set()
-        self.work_queue = simpy.Store(env)
+        self.work_queue = simpy.Store(self.env)
         self.connected_nodes = []
 
     def connect_node(self, other_node):
-        logging.info(f"Node {self.node_id} connecting to node {other_node.node_id}")
+        logging.info(f"Worker {self.node_id} connecting to worker {other_node.node_id}")
         self.connected_nodes.append(other_node)
 
     def add_task(self, task):
-        logging.info(f"Node {self.node_id} accepting task {task.task_id}")
+        log(f"Worker {self.node_id} accepting task {task.task_id}")
         self.work_queue.put(task)
 
     def add_operation(self, operation):
@@ -31,35 +32,27 @@ class WorkerNode:
     def process_task(self):
         while True:
             task = yield self.work_queue.get()
-            logging.info(f"Node {self.node_id} processing task {task.task_id} requiring operations {task.operations}")
+            log(f"Worker {self.node_id} processing task {task.task_id} requiring operations {task.operations}")
             if self.can_perform_operations(task):
                 operation = self.get_matching_operation(task)
-                logging.info(f"Node {self.node_id} performing operation {operation} on task {task.task_id}")
-                self.perform_operation(operation, task)
+                log(f"Worker {self.node_id} performing operation {operation} on task {task.task_id}")
+                task.operations.remove(operation)
+                yield self.env.timeout(task_processing_time)
+                if not task.operations:
+                    log(f"Task {task.task_id} completed!")
+                    # TODO: record information for tracking
+                else:
+                    self.add_task(task)  # Requeue it for more work
             else:
-                logging.info(f"Node {self.node_id} forwarding task {task.task_id}")
-                self.forward_task(task)
+                log(f"Worker {self.node_id} forwarding task {task.task_id}")
+                yield self.env.timeout(task_transfer_time)
+                network.route(self, task)
 
     def can_perform_operations(self, task):
         return any(operation in task.operations for operation in self.operations)
 
     def get_matching_operation(self, task):
         return random.choice(list(set(self.operations) & set(task.operations)))
-
-    def perform_operation(self, operation, task):
-        print(f"Worker Node {self.node_id} performing operation {operation} for Task {task.task_id}")
-        task.operations.remove(operation)
-        env.timeout(task_processing_time)
-        if not task.operations:
-            print(f"Task {task.task_id} completed!")
-            # TODO: record information for tracking
-        else:
-            # Requeue it for more work
-            self.add_task(task)
-
-    def forward_task(self, task):
-        env.timeout(task_transfer_time)
-        network.route(self, task)
 
 
 class RandomNetwork:
@@ -91,15 +84,15 @@ def generate_tasks(env: simpy.Environment, target_nodes: List[WorkerNode]):
     task_id = 0
     while True:
         # Generate a task with a small set of randomly chosen process steps
-        task = Task(task_id, worker_max_operations, operation_range)
-        print(f"Task generated: {task}")
+        task = Task(task_id, worker_avg_operations, operation_range)
+        log(f"Generated task {task.task_id}")
 
         # Assign the task to a random worker node for processing
         random.choice(target_nodes).add_task(task)
         task_id += 1
 
         # Simulate the time between task generation
-        yield env.timeout(random.expovariate(task_generation_rate))
+        yield env.timeout(round(random.expovariate(task_generation_rate)))
 
 
 # Assign each node the ability to perform specific operations
@@ -112,38 +105,42 @@ def assign_skills(worker_nodes: List[WorkerNode]) -> None:
         if len(node.operations) == 0:
             node.add_operation(random.randint(1, operation_range))
     # Add extra operations so on average each worker has worker_max_operations
-    for counter in range(operation_range, num_nodes * worker_max_operations):
+    for counter in range(operation_range, num_nodes * worker_avg_operations):
         random.choice(worker_nodes).add_operation(random.randint(1, operation_range))
         counter += 1
     for node in worker_nodes:
         logging.info(f"Worker {node.node_id} can perform operations {node.operations}")
 
 
+def log(message):
+    logging.info(f"{env.now} {message}")
+
+
 # Configuration variables
 num_nodes = 5
 num_input_nodes = 5
 num_steps = 10
-task_generation_rate = 0.5  # Tasks per time unit
-worker_max_operations = 3
+task_generation_rate = 0.1  # Tasks per time unit
+worker_avg_operations = 3
 operation_range = 10
 worker_max_connections = 2
 random.seed(42)
-task_processing_time = 2
+task_processing_time = 1
 task_transfer_time = 1
 
 # Create SimPy environment and initialize worker nodes
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(format='%(message)s', level=logging.INFO)
 env = simpy.Environment()
 network = RandomNetwork()
 
-nodes = [WorkerNode(env, node_id, worker_max_operations, operation_range)
+nodes = [WorkerNode(env, node_id)
          for node_id in range(num_nodes)]
 
 assign_skills(nodes)
 
 # Set up the network connections
 entry_nodes = RandomNetwork.setup_network(nodes)
-logging.info("Entry nodes are {}" % node.node_id for node in entry_nodes)
+logging.info("Entry nodes are {}".format(sorted([node.node_id for node in entry_nodes])))
 
 # Start the worker processes
 [env.process(node.process_task()) for node in nodes]
@@ -152,5 +149,5 @@ logging.info("Entry nodes are {}" % node.node_id for node in entry_nodes)
 env.process(generate_tasks(env, entry_nodes))
 
 # Run the simulation for a specific duration
-sim_duration = 10  # Simulation duration in time units
+sim_duration = 200  # Simulation duration in time units
 env.run(until=sim_duration)
