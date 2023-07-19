@@ -1,0 +1,39 @@
+Processes:
+- Worker
+   Actions:
+     - resolve task, or
+     - forward work do work
+       - decide how to route
+     - accept injected work and add it to queue
+   Yields:
+     - wait on new work on their work queue
+
+- Router
+   Actions:
+     - from a list of available nodes, decide how to route
+   Notes:
+     - Try different methods: HierarchicalRouter, RandomRouter, SmartRouter
+
+- NetworkBuilder
+   Actions:
+     - build network (between worker nodes). Output list of input points for work.
+
+- Task
+   Data:
+     - list of required operations (created on construction)
+     - create time
+   Actions:
+     - do_task: given list of caller's operations can do, if any match, do one
+   Events:
+     - task complete: record time
+
+- TaskInjector:
+   Actions:
+     - periodically create and inject tasks to input points
+
+- WIPScanner
+   Actions:
+     - find all non-completed tasks and store their open time and number of uncompleted operations
+   Yields:
+     - called regularly
+     - called at end of processing
