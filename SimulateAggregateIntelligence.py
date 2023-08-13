@@ -176,7 +176,8 @@ processing_times = []
 num_operations = []
 
 # Create SimPy environment and initialize worker nodes
-random.seed(c.seed)
+if c.seed:
+    random.seed(c.seed)
 logging.basicConfig(format='%(message)s', level=logging.INFO)
 env = simpy.Environment()
 network = RandomNetwork()
