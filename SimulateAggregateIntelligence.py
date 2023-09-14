@@ -13,17 +13,18 @@ import os
 # Configuration variables
 @dataclass
 class Config:
-    num_nodes: int
-    num_input_nodes: int
-    num_steps: int
-    task_generation_rate: float  # Tasks per time unit
-    worker_avg_operations: int
-    operation_range: int
-    worker_max_connections: int
-    task_processing_time: int
-    task_transfer_time: int
-    seed: int
-    sample_rate: int
+    num_nodes: int # Number of nodes in the network
+    num_input_nodes: int # Number of nodes where work enters
+    task_generation_rate: float  # Tasks generated per time unit
+    worker_avg_operations: int # Number of operations a worker can perform on average
+    operation_range: int # Size of bucket from which possible task operations are drawn
+    worker_max_connections: int # Max connections a worker can have to other workers
+    task_processing_time: int # Time units it takes a worker to process a task
+    task_transfer_time: int # Time units is takes a worker to transfer a task
+    seed: int # Seed to start random number generator (set to 0 to turn on 0 random behavior)
+    sample_rate: int # Period in (time units) to sample tasks done and outstanding
+    num_runs: int # Number of experimental runs
+    sim_duration: int # Number of time units to run the simulation for
 
 
 class Task:
@@ -125,7 +126,7 @@ def generate_tasks(config: Config, env: simpy.Environment, target_nodes: List[Wo
         random.choice(target_nodes).add_task(task)
         task_id += 1
 
-        # Simulate the time between task generation
+        # Generate tasks at a constant time
         yield env.timeout(round(random.expovariate(config.task_generation_rate)))
 
 
@@ -184,9 +185,7 @@ def read_config(config_filename):
         return class_from_args(Config, json.load(json_file))
 
 
-def store_results(run_name: str):
-    # write configuration
-    # config = {'num_nodes': num_nodes, 'num_input_nodes': num_input_nodes, 'num_steps'}
+def store_run_results(run_name: str):
     # write data
     output_file = os.path.join("output", run_name + '-output.csv')
     df = pd.DataFrame(data={'completion_time': completion_times, 'task_id': task_ids, 'start_time': start_times,
@@ -195,19 +194,18 @@ def store_results(run_name: str):
 
     sample_file = os.path.join("output", run_name + '-samples.csv')
     df2 = pd.DataFrame(data={'sample_time': sample_times, 'tasks_completed': tasks_completed,
-                             'work_in_progress': work_in_process})
+                             'work_in_process': work_in_process})
     df2.to_csv(sample_file, index=False)
+    run_list.append(run_ctr)
+    final_tasks_completed.append(tasks_completed[-1])
+    final_work_in_process.append(work_in_process[-1])
 
-# Tracking lists
-completion_times = []
-task_ids = []
-start_times = []
-processing_times = []
-num_operations = []
-sample_times = []
-tasks_completed = []
-work_in_process = []
 
+def store_final_results():
+    output_file = os.path.join("output", 'overall-output.csv')
+    df = pd.DataFrame(data={'run_num': run_list, 'tasks_completed': final_tasks_completed,
+                             'work_in_process': final_work_in_process})
+    df.to_csv(output_file, index=False)
 
 # Read configuration
 parser = argparse.ArgumentParser(description='Run a computational simulation of aggregate intelligence')
@@ -218,31 +216,54 @@ args = parser.parse_args();
 c = read_config(args.config_file)
 if c.seed:
     random.seed(c.seed)
-run_name = os.path.splitext(os.path.basename(args.config_file))[0]
-log_name = os.path.join('logs', run_name + '.log')
-logging.basicConfig(filename=log_name, format='%(message)s', level=logging.INFO)
-env = simpy.Environment()
-network = RandomNetwork()
+    if c.num_runs != 1:
+        print("Forcing num_runs to 0 because seed is set, so multiple runs will produce the same result")
+        c.num_runs = 1
 
-nodes = [WorkerNode(c, env, node_id)
+# Setup overall run tracking lists
+run_list = []
+final_tasks_completed = []
+final_work_in_process = []
+
+for run_ctr in range(1, c.num_runs + 1):
+    # Set up run name and storage
+    run_name = os.path.splitext(os.path.basename(args.config_file))[0] + f"-run{run_ctr}"
+    log_name = os.path.join('logs', run_name + '.log')
+    logging.basicConfig(filename=log_name, filemode="w", format='%(message)s', level=logging.INFO, force=True)
+
+    # Clear tracking lists
+    completion_times = []
+    task_ids = []
+    start_times = []
+    processing_times = []
+    num_operations = []
+    sample_times = []
+    tasks_completed = []
+    work_in_process = []
+
+    # Build the simulation
+    env = simpy.Environment()
+    network = RandomNetwork()
+
+    nodes = [WorkerNode(c, env, node_id)
          for node_id in range(c.num_nodes)]
 
-assign_skills(c, nodes)
+    assign_skills(c, nodes)
 
-# Set up the network connections
-entry_nodes = RandomNetwork.setup_network(c, nodes)
-logging.info("Entry nodes are {}".format(sorted([node.node_id for node in entry_nodes])))
+    # Set up the network connections
+    entry_nodes = RandomNetwork.setup_network(c, nodes)
+    logging.info("Entry nodes are {}".format(sorted([node.node_id for node in entry_nodes])))
 
-# Start the worker processes
-[env.process(node.process_task()) for node in nodes]
+    # Start the worker processes
+    [env.process(node.process_task()) for node in nodes]
 
-# Start the task generator process
-env.process(generate_tasks(c, env, entry_nodes))
+    # Start the task generator process
+    env.process(generate_tasks(c, env, entry_nodes))
 
-# Start the work sampler
-env.process(sample_work(c, env, entry_nodes))
+    # Start the work sampler
+    env.process(sample_work(c, env, entry_nodes))
 
-# Run the simulation for a specific duration
-sim_duration = 200  # Simulation duration in time units
-env.run(until=sim_duration)
-store_results(run_name)
+    # Run the simulation for a specific duration
+    env.run(until=c.sim_duration)
+    store_run_results(run_name)
+store_final_results()
