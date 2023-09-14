@@ -1,10 +1,13 @@
+import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import simpy
 from typing import List
 import logging
 import pandas as pd
+import argparse
+import os
 
 
 # Configuration variables
@@ -146,6 +149,17 @@ def log(message):
     logging.info(f"{env.now} {message}")
 
 
+def class_from_args(class_name: object, arg_dict):
+    field_set = { f.name for f in fields(class_name) if f.init}
+    filtered_arg_dict: dict = {k : v for k, v in arg_dict.items() if k in field_set}
+    return class_name(**filtered_arg_dict)
+
+
+def read_config(config_filename):
+    with open(config_filename) as json_file:
+        return class_from_args(Config, json.load(json_file))
+
+
 def store_results():
     # write configuration
     # config = {'num_nodes': num_nodes, 'num_input_nodes': num_input_nodes, 'num_steps'}
@@ -155,19 +169,6 @@ def store_results():
     df.to_csv('output.csv', index=False)  # TODO: use run name
 
 
-c = Config(**{
-    'num_nodes': 5,
-    'num_input_nodes': 5,
-    'num_steps': 10,
-    'task_generation_rate': 0.1,  # Tasks per time unit
-    'worker_avg_operations': 3,
-    'operation_range': 10,
-    'worker_max_connections': 2,
-    'task_processing_time': 1,
-    'task_transfer_time': 1,
-    'seed': 42
-})
-
 # Tracking lists
 completion_times = []
 task_ids = []
@@ -175,10 +176,17 @@ start_times = []
 processing_times = []
 num_operations = []
 
+# Read configuration
+parser = argparse.ArgumentParser(description='Run a computational simulation of aggregate intelligence')
+parser.add_argument('config_file', help='Config file setting simulaton parameters')
+args = parser.parse_args();
+
 # Create SimPy environment and initialize worker nodes
+c = read_config(args.config_file)
 if c.seed:
     random.seed(c.seed)
-logging.basicConfig(format='%(message)s', level=logging.INFO)
+log_name = 'logs/' + os.path.splitext(os.path.basename(args.config_file))[0] + '.log'
+logging.basicConfig(filename=log_name, format='%(message)s', level=logging.INFO)
 env = simpy.Environment()
 network = RandomNetwork()
 
