@@ -8,5 +8,6 @@
     "worker_max_connections": 2,
     "task_processing_time": 1,
     "task_transfer_time": 1,
-    "seed": 42
+    "seed": 42,
+    "sample_rate": 5
 }

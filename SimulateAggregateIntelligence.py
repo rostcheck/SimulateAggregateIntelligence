@@ -23,6 +23,7 @@ class Config:
     task_processing_time: int
     task_transfer_time: int
     seed: int
+    sample_rate: int
 
 
 class Task:
@@ -42,6 +43,7 @@ class WorkerNode:
         self.operations = set()
         self.work_queue = simpy.Store(self.env)
         self.connected_nodes = []
+        self.tasks_completed = 0
 
     def connect_node(self, other_node):
         logging.info(f"Worker {self.node_id} connecting to worker {other_node.node_id}")
@@ -50,6 +52,12 @@ class WorkerNode:
     def add_task(self, task):
         log(f"Worker {self.node_id} accepting task {task.task_id}")
         self.work_queue.put(task)
+
+    def get_wip(self):
+        return len(self.work_queue.items)
+
+    def get_tasks_completed(self):
+        return self.tasks_completed
 
     def add_operation(self, operation):
         self.operations.add(operation)
@@ -65,6 +73,7 @@ class WorkerNode:
                 yield self.env.timeout(self.config.task_processing_time)
                 if not task.operations:
                     log(f"Task {task.task_id} completed!")
+                    self.tasks_completed += 1
                     record_task_completion(self.env.now, task)
                 else:
                     self.add_task(task)  # Requeue it for more work
@@ -137,6 +146,21 @@ def assign_skills(config: Config, worker_nodes: List[WorkerNode]) -> None:
         logging.info(f"Worker {node.node_id} can perform operations {node.operations}")
 
 
+def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[WorkerNode]):
+    while True:
+        completed = 0
+        wip = 0
+        for node in worker_nodes:
+            wip += node.get_wip()
+            completed += node.get_tasks_completed()
+
+        sample_times.append(env.now)
+        tasks_completed.append(completed)
+        work_in_process.append(wip)
+
+        # Queue another sample
+        yield env.timeout(config.sample_rate)
+
 def record_task_completion(completion_time, task):
     completion_times.append(completion_time)
     task_ids.append(task.task_id)
@@ -160,14 +184,19 @@ def read_config(config_filename):
         return class_from_args(Config, json.load(json_file))
 
 
-def store_results():
+def store_results(run_name: str):
     # write configuration
     # config = {'num_nodes': num_nodes, 'num_input_nodes': num_input_nodes, 'num_steps'}
     # write data
+    output_file = os.path.join("output", run_name + '-output.csv')
     df = pd.DataFrame(data={'completion_time': completion_times, 'task_id': task_ids, 'start_time': start_times,
                             'process_time': processing_times, 'num_operations': num_operations})
-    df.to_csv('output.csv', index=False)  # TODO: use run name
+    df.to_csv(output_file, index=False)
 
+    sample_file = os.path.join("output", run_name + '-samples.csv')
+    df2 = pd.DataFrame(data={'sample_time': sample_times, 'tasks_completed': tasks_completed,
+                             'work_in_progress': work_in_process})
+    df2.to_csv(sample_file, index=False)
 
 # Tracking lists
 completion_times = []
@@ -175,6 +204,10 @@ task_ids = []
 start_times = []
 processing_times = []
 num_operations = []
+sample_times = []
+tasks_completed = []
+work_in_process = []
+
 
 # Read configuration
 parser = argparse.ArgumentParser(description='Run a computational simulation of aggregate intelligence')
@@ -185,7 +218,8 @@ args = parser.parse_args();
 c = read_config(args.config_file)
 if c.seed:
     random.seed(c.seed)
-log_name = 'logs/' + os.path.splitext(os.path.basename(args.config_file))[0] + '.log'
+run_name = os.path.splitext(os.path.basename(args.config_file))[0]
+log_name = os.path.join('logs', run_name + '.log')
 logging.basicConfig(filename=log_name, format='%(message)s', level=logging.INFO)
 env = simpy.Environment()
 network = RandomNetwork()
@@ -205,7 +239,10 @@ logging.info("Entry nodes are {}".format(sorted([node.node_id for node in entry_
 # Start the task generator process
 env.process(generate_tasks(c, env, entry_nodes))
 
+# Start the work sampler
+env.process(sample_work(c, env, entry_nodes))
+
 # Run the simulation for a specific duration
 sim_duration = 200  # Simulation duration in time units
 env.run(until=sim_duration)
-store_results()
+store_results(run_name)
