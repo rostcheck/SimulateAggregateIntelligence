@@ -13,18 +13,18 @@ import os
 # Configuration variables
 @dataclass
 class Config:
-    num_nodes: int # Number of nodes in the network
-    num_input_nodes: int # Number of nodes where work enters
+    num_nodes: int  # Number of nodes in the network
+    num_input_nodes: int  # Number of nodes where work enters
     task_generation_rate: float  # Tasks generated per time unit
-    worker_avg_operations: int # Number of operations a worker can perform on average
-    operation_range: int # Size of bucket from which possible task operations are drawn
-    worker_max_connections: int # Max connections a worker can have to other workers
-    task_processing_time: int # Time units it takes a worker to process a task
-    task_transfer_time: int # Time units is takes a worker to transfer a task
-    seed: int # Seed to start random number generator (set to 0 to turn on 0 random behavior)
-    sample_rate: int # Period in (time units) to sample tasks done and outstanding
-    num_runs: int # Number of experimental runs
-    sim_duration: int # Number of time units to run the simulation for
+    worker_avg_operations: int  # Number of operations a worker can perform on average
+    operation_range: int  # Size of bucket from which possible task operations are drawn
+    worker_max_connections: int  # Max connections a worker can have to other workers
+    task_processing_time: int  # Time units it takes a worker to process a task
+    task_transfer_time: int  # Time units is takes a worker to transfer a task
+    seed: int  # Seed to start random number generator (set to 0 to turn on 0 random behavior)
+    sample_rate: int  # Period in (time units) to sample tasks done and outstanding
+    num_runs: int  # Number of experimental runs
+    sim_duration: int  # Number of time units to run the simulation for
 
 
 class Task:
@@ -45,6 +45,8 @@ class WorkerNode:
         self.work_queue = simpy.Store(self.env)
         self.connected_nodes = []
         self.tasks_completed = 0
+        self.tasks_awaiting_forwarding = 0
+        self.tasks_in_process = 0
 
     def connect_node(self, other_node):
         logging.info(f"Worker {self.node_id} connecting to worker {other_node.node_id}")
@@ -55,7 +57,7 @@ class WorkerNode:
         self.work_queue.put(task)
 
     def get_wip(self):
-        return len(self.work_queue.items)
+        return len(self.work_queue.items) + self.tasks_awaiting_forwarding + self.tasks_in_process
 
     def get_tasks_completed(self):
         return self.tasks_completed
@@ -69,9 +71,11 @@ class WorkerNode:
             log(f"Worker {self.node_id} processing task {task.task_id} requiring operations {task.operations}")
             if self.can_perform_operations(task):
                 operation = self.get_matching_operation(task)
+                self.tasks_in_process += 1
                 log(f"Worker {self.node_id} performing operation {operation} on task {task.task_id}")
                 task.operations.remove(operation)
                 yield self.env.timeout(self.config.task_processing_time)
+                self.tasks_in_process -= 1
                 if not task.operations:
                     log(f"Task {task.task_id} completed!")
                     self.tasks_completed += 1
@@ -79,8 +83,10 @@ class WorkerNode:
                 else:
                     self.add_task(task)  # Requeue it for more work
             else:
+                self.tasks_awaiting_forwarding += 1
                 log(f"Worker {self.node_id} forwarding task {task.task_id}")
                 yield self.env.timeout(self.config.task_transfer_time)
+                self.tasks_awaiting_forwarding -= 1
                 network.route(self, task)
 
     def can_perform_operations(self, task):
@@ -127,13 +133,13 @@ def generate_tasks(config: Config, env: simpy.Environment, target_nodes: List[Wo
         task_id += 1
 
         # Generate tasks at a constant time
-        yield env.timeout(round(random.expovariate(config.task_generation_rate)))
+        yield env.timeout(config.task_generation_rate)
 
 
 # Assign each node the ability to perform specific operations
 def assign_skills(config: Config, worker_nodes: List[WorkerNode]) -> None:
     # Insure each skill is assigned once
-    for operation in range(1, config.operation_range):
+    for operation in range(1, config.operation_range + 1):
         random.choice(worker_nodes).add_operation(operation)
     # Insure each worker has at least one skill
     for node in worker_nodes:
@@ -149,11 +155,7 @@ def assign_skills(config: Config, worker_nodes: List[WorkerNode]) -> None:
 
 def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[WorkerNode]):
     while True:
-        completed = 0
-        wip = 0
-        for node in worker_nodes:
-            wip += node.get_wip()
-            completed += node.get_tasks_completed()
+        (completed, wip) = get_work_counts(worker_nodes)
 
         sample_times.append(env.now)
         tasks_completed.append(completed)
@@ -161,6 +163,16 @@ def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[Worke
 
         # Queue another sample
         yield env.timeout(config.sample_rate)
+
+
+def get_work_counts(worker_nodes: List[WorkerNode]) -> (int, int):
+    completed = 0
+    wip = 0
+    for node in worker_nodes:
+        wip += node.get_wip()
+        completed += node.get_tasks_completed()
+    return completed, wip
+
 
 def record_task_completion(completion_time, task):
     completion_times.append(completion_time)
@@ -175,8 +187,8 @@ def log(message):
 
 
 def class_from_args(class_name: object, arg_dict):
-    field_set = { f.name for f in fields(class_name) if f.init}
-    filtered_arg_dict: dict = {k : v for k, v in arg_dict.items() if k in field_set}
+    field_set = {f.name for f in fields(class_name) if f.init}
+    filtered_arg_dict: dict = {k: v for k, v in arg_dict.items() if k in field_set}
     return class_name(**filtered_arg_dict)
 
 
@@ -185,7 +197,7 @@ def read_config(config_filename):
         return class_from_args(Config, json.load(json_file))
 
 
-def store_run_results(run_name: str):
+def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
     # write data
     output_file = os.path.join("output", run_name + '-output.csv')
     df = pd.DataFrame(data={'completion_time': completion_times, 'task_id': task_ids, 'start_time': start_times,
@@ -197,20 +209,23 @@ def store_run_results(run_name: str):
                              'work_in_process': work_in_process})
     df2.to_csv(sample_file, index=False)
     run_list.append(run_ctr)
-    final_tasks_completed.append(tasks_completed[-1])
-    final_work_in_process.append(work_in_process[-1])
+    (completed, wip) = get_work_counts(worker_nodes)
+
+    final_tasks_completed.append(completed)
+    final_work_in_process.append(wip)
 
 
-def store_final_results():
-    output_file = os.path.join("output", 'overall-output.csv')
+def store_final_results(config_name: str):
+    output_file = os.path.join("output", f"{config_name}-overall-output.csv")
     df = pd.DataFrame(data={'run_num': run_list, 'tasks_completed': final_tasks_completed,
-                             'work_in_process': final_work_in_process})
+                            'work_in_process': final_work_in_process})
     df.to_csv(output_file, index=False)
+
 
 # Read configuration
 parser = argparse.ArgumentParser(description='Run a computational simulation of aggregate intelligence')
-parser.add_argument('config_file', help='Config file setting simulaton parameters')
-args = parser.parse_args();
+parser.add_argument('config_file', help='Config file setting simulation parameters')
+args = parser.parse_args()
 
 # Create SimPy environment and initialize worker nodes
 c = read_config(args.config_file)
@@ -225,9 +240,11 @@ run_list = []
 final_tasks_completed = []
 final_work_in_process = []
 
+# Main experiment loop
+config_name = os.path.splitext(os.path.basename(args.config_file))[0]
 for run_ctr in range(1, c.num_runs + 1):
     # Set up run name and storage
-    run_name = os.path.splitext(os.path.basename(args.config_file))[0] + f"-run{run_ctr}"
+    run_name = config_name + f"-run{run_ctr}"
     log_name = os.path.join('logs', run_name + '.log')
     logging.basicConfig(filename=log_name, filemode="w", format='%(message)s', level=logging.INFO, force=True)
 
@@ -246,7 +263,7 @@ for run_ctr in range(1, c.num_runs + 1):
     network = RandomNetwork()
 
     nodes = [WorkerNode(c, env, node_id)
-         for node_id in range(c.num_nodes)]
+             for node_id in range(c.num_nodes)]
 
     assign_skills(c, nodes)
 
@@ -265,5 +282,5 @@ for run_ctr in range(1, c.num_runs + 1):
 
     # Run the simulation for a specific duration
     env.run(until=c.sim_duration)
-    store_run_results(run_name)
-store_final_results()
+    store_run_results(run_name, nodes)
+store_final_results(config_name)
