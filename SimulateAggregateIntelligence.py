@@ -199,12 +199,12 @@ def read_config(config_filename):
 
 def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
     # write data
-    output_file = os.path.join("output", run_name + '-output.csv')
+    output_file = os.path.join(experiment_path, "output", run_name + '-output.csv')
     df = pd.DataFrame(data={'completion_time': completion_times, 'task_id': task_ids, 'start_time': start_times,
                             'process_time': processing_times, 'num_operations': num_operations})
     df.to_csv(output_file, index=False)
 
-    sample_file = os.path.join("output", run_name + '-samples.csv')
+    sample_file = os.path.join(experiment_path, "output", run_name + '-samples.csv')
     df2 = pd.DataFrame(data={'sample_time': sample_times, 'tasks_completed': tasks_completed,
                              'work_in_process': work_in_process})
     df2.to_csv(sample_file, index=False)
@@ -216,7 +216,7 @@ def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
 
 
 def store_final_results(config_name: str):
-    output_file = os.path.join("output", f"{config_name}-overall-output.csv")
+    output_file = os.path.join(experiment_path, "output", "overall-output.csv")
     df = pd.DataFrame(data={'run_num': run_list, 'tasks_completed': final_tasks_completed,
                             'work_in_process': final_work_in_process})
     df.to_csv(output_file, index=False)
@@ -224,11 +224,14 @@ def store_final_results(config_name: str):
 
 # Read configuration
 parser = argparse.ArgumentParser(description='Run a computational simulation of aggregate intelligence')
-parser.add_argument('config_file', help='Config file setting simulation parameters')
+parser.add_argument('experiment_dir', help='Experiment directory (containing config file)')
 args = parser.parse_args()
+experiment_path = args.experiment_dir
+experiment_name = os.path.splitext(os.path.basename(experiment_path))[0]
+config_name = os.path.join(args.experiment_dir, f"{experiment_name}.json")
 
 # Create SimPy environment and initialize worker nodes
-c = read_config(args.config_file)
+c = read_config(config_name)
 if c.seed:
     random.seed(c.seed)
     if c.num_runs != 1:
@@ -241,11 +244,16 @@ final_tasks_completed = []
 final_work_in_process = []
 
 # Main experiment loop
-config_name = os.path.splitext(os.path.basename(args.config_file))[0]
 for run_ctr in range(1, c.num_runs + 1):
     # Set up run name and storage
-    run_name = config_name + f"-run{run_ctr}"
-    log_name = os.path.join('logs', run_name + '.log')
+    log_dir = os.path.join(args.experiment_dir, "logs")
+    if not os.path.isdir(log_dir):
+        os.mkdir(log_dir)
+    output_dir = os.path.join(args.experiment_dir, "output")
+    if not os.path.isdir(output_dir):
+        os.mkdir(output_dir)
+    run_name = f"run{run_ctr}"
+    log_name = os.path.join(log_dir, run_name + '.log')
     logging.basicConfig(filename=log_name, filemode="w", format='%(message)s', level=logging.INFO, force=True)
 
     # Clear tracking lists
