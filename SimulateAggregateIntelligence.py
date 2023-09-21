@@ -230,6 +230,20 @@ experiment_path = args.experiment_dir
 experiment_name = os.path.splitext(os.path.basename(experiment_path))[0]
 config_name = os.path.join(args.experiment_dir, f"{experiment_name}.json")
 
+# Set up storage
+log_dir = os.path.join(args.experiment_dir, "logs")
+if not os.path.isdir(log_dir):
+    os.mkdir(log_dir)
+output_dir = os.path.join(args.experiment_dir, "output")
+if not os.path.isdir(output_dir):
+    os.mkdir(output_dir)
+
+# Protect against data overwrite
+test_log_name = os.path.join(log_dir, 'run1.log')
+if os.path.exists(test_log_name):
+    print(f"Error, run data already exists for {experiment_name}")
+    exit;
+
 # Create SimPy environment and initialize worker nodes
 c = read_config(config_name)
 if c.seed:
@@ -245,13 +259,7 @@ final_work_in_process = []
 
 # Main experiment loop
 for run_ctr in range(1, c.num_runs + 1):
-    # Set up run name and storage
-    log_dir = os.path.join(args.experiment_dir, "logs")
-    if not os.path.isdir(log_dir):
-        os.mkdir(log_dir)
-    output_dir = os.path.join(args.experiment_dir, "output")
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
+    # Set up run name
     run_name = f"run{run_ctr}"
     log_name = os.path.join(log_dir, run_name + '.log')
     logging.basicConfig(filename=log_name, filemode="w", format='%(message)s', level=logging.INFO, force=True)
