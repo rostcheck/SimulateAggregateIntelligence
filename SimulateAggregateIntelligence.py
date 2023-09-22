@@ -1,13 +1,13 @@
 import json
 import random
 from dataclasses import dataclass, fields
-
 import simpy
 from typing import List
 import logging
 import pandas as pd
 import argparse
 import os
+from abc import ABC, abstractmethod
 
 
 # Configuration variables
@@ -25,6 +25,7 @@ class Config:
     sample_rate: int  # Period in (time units) to sample tasks done and outstanding
     num_runs: int  # Number of experimental runs
     sim_duration: int  # Number of time units to run the simulation for
+    network: str  # 'random' or 'full-connect'
 
 
 class Task:
@@ -50,7 +51,8 @@ class WorkerNode:
 
     def connect_node(self, other_node):
         logging.info(f"Worker {self.node_id} connecting to worker {other_node.node_id}")
-        self.connected_nodes.append(other_node)
+        if other_node not in self.connected_nodes:
+            self.connected_nodes.append(other_node)
 
     def add_task(self, task):
         log(f"Worker {self.node_id} accepting task {task.task_id}")
@@ -96,7 +98,45 @@ class WorkerNode:
         return random.choice(list(set(self.operations) & set(task.operations)))
 
 
-class RandomNetwork:
+# Abstract base class for a network implementation
+class Network(ABC):
+    # Set up the network configuration
+    @staticmethod
+    @abstractmethod
+    def setup_network(config: Config, worker_nodes: List[WorkerNode]) -> List[WorkerNode]:
+        pass
+
+    # Route work from a node to a recipient (using whatever rules this network uses)
+    @staticmethod
+    def route(from_node, task):
+        pass
+
+    # Helper function to connect nodes bidirectionally
+    @staticmethod
+    def connect_nodes(node: WorkerNode, new_connection: WorkerNode):
+        node.connect_node(new_connection)
+        new_connection.connect_node(node)
+
+
+class FullyConnectedNetwork(Network):
+    # Setup network of num_input_nodes input nodes that are fully connected (each with every other)
+    @staticmethod
+    def setup_network(config: Config, worker_nodes: List[WorkerNode]) -> List[WorkerNode]:
+        # Fully connect to all other nodes
+        for node in worker_nodes:
+            other_nodes = list(worker_nodes)
+            other_nodes.remove(node)
+            for other_node in other_nodes:
+                node.connect_node(other_node)
+        return worker_nodes # All nodes are inputs
+
+    @staticmethod
+    def route(from_node, task):
+        # Send to a random recipient
+        random.choice(from_node.connected_nodes).add_task(task)
+
+
+class RandomNetwork(Network):
     # Setup network of random connections with num_input_nodes input nodes
     @staticmethod
     def setup_network(config: Config, worker_nodes: List[WorkerNode]) -> List[WorkerNode]:
@@ -105,15 +145,9 @@ class RandomNetwork:
             connections_needed = config.worker_max_connections - len(node.connected_nodes)
             if connections_needed > 0:
                 possible_connections = list(set(worker_nodes) - set(node.connected_nodes) - {node})
-                [RandomNetwork.connect_nodes(node, new_connection) for new_connection
+                [super().connect_nodes(node, new_connection) for new_connection
                  in random.sample(possible_connections, connections_needed)]
         return random.sample(worker_nodes, config.num_input_nodes)
-
-    # Bidirectionally connect nodes
-    @staticmethod
-    def connect_nodes(node: WorkerNode, new_connection: WorkerNode):
-        node.connect_node(new_connection)
-        new_connection.connect_node(node)
 
     @staticmethod
     def route(from_node, task):
@@ -229,6 +263,9 @@ args = parser.parse_args()
 experiment_path = args.experiment_dir
 experiment_name = os.path.splitext(os.path.basename(experiment_path))[0]
 config_name = os.path.join(args.experiment_dir, f"{experiment_name}.json")
+if not os.path.exists(config_name):
+    print(f'Error, file {config_name} does not exist')
+    exit(-1)
 
 # Set up storage
 log_dir = os.path.join(args.experiment_dir, "logs")
@@ -242,7 +279,7 @@ if not os.path.isdir(output_dir):
 test_log_name = os.path.join(log_dir, 'run1.log')
 if os.path.exists(test_log_name):
     print(f"Error, run data already exists for {experiment_name}")
-    exit;
+    exit(-1)
 
 # Create SimPy environment and initialize worker nodes
 c = read_config(config_name)
@@ -258,6 +295,7 @@ final_tasks_completed = []
 final_work_in_process = []
 
 # Main experiment loop
+is_first_pass = True
 for run_ctr in range(1, c.num_runs + 1):
     # Set up run name
     run_name = f"run{run_ctr}"
@@ -276,15 +314,23 @@ for run_ctr in range(1, c.num_runs + 1):
 
     # Build the simulation
     env = simpy.Environment()
-    network = RandomNetwork()
-
     nodes = [WorkerNode(c, env, node_id)
              for node_id in range(c.num_nodes)]
-
     assign_skills(c, nodes)
 
-    # Set up the network connections
-    entry_nodes = RandomNetwork.setup_network(c, nodes)
+    # Set up the network
+    logging.info(f"Building network type {c.network}")
+    if c.network == 'full-connect':
+        network = FullyConnectedNetwork()
+        entry_nodes = network.setup_network(c, nodes)
+    else:
+        if c.network == 'random':
+            network = RandomNetwork()
+            entry_nodes = network.setup_network(c, nodes)
+        else:
+            print(f"Network type {c.network} is unknown")
+            logging.info(f"Network type {c.network} is unknown")
+            exit(-1)
     logging.info("Entry nodes are {}".format(sorted([node.node_id for node in entry_nodes])))
 
     # Start the worker processes
@@ -299,4 +345,5 @@ for run_ctr in range(1, c.num_runs + 1):
     # Run the simulation for a specific duration
     env.run(until=c.sim_duration)
     store_run_results(run_name, nodes)
+    is_first_pass = False
 store_final_results(config_name)
