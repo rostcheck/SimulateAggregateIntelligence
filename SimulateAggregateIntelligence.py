@@ -53,6 +53,7 @@ class WorkerNode:
         self.complexity_completed = 0
         self.tasks_awaiting_forwarding = 0
         self.tasks_in_process = 0
+        self.tasks_forwarded = 0
 
     def connect_node(self, other_node):
         logging.info(f"Worker {self.node_id} connecting to worker {other_node.node_id}")
@@ -101,6 +102,7 @@ class WorkerNode:
                 log(f"Worker {self.node_id} forwarding task {task.task_id}")
                 yield self.env.timeout(self.config.task_transfer_time)
                 self.tasks_awaiting_forwarding -= 1
+                self.tasks_forwarded += 1
                 network.route(self, task)
 
     def can_perform_operations(self, task):
@@ -201,11 +203,12 @@ def assign_skills(config: Config, worker_nodes: List[WorkerNode]) -> None:
 
 def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[WorkerNode]):
     while True:
-        (completed, wip, complexity) = get_work_counts(worker_nodes)
+        (completed, wip, complexity, forwarded) = get_work_counts(worker_nodes)
 
         sample_times.append(env.now)
         tasks_completed.append(completed)
         work_in_process.append(wip)
+        tasks_forwarded.append(forwarded)
 
         # Queue another sample
         yield env.timeout(config.sample_rate)
@@ -214,12 +217,14 @@ def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[Worke
 def get_work_counts(worker_nodes: List[WorkerNode]) -> (int, int, int):
     completed = 0
     complexity_completed = 0
+    forwarded = 0
     wip = 0
     for node in worker_nodes:
         wip += node.wip
         completed += node.tasks_completed
         complexity_completed += node.complexity_completed
-    return completed, wip, complexity_completed
+        forwarded += node.tasks_forwarded
+    return completed, wip, complexity_completed, forwarded
 
 
 def record_task_completion(completion_time, task):
@@ -254,20 +259,21 @@ def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
 
     sample_file = os.path.join(experiment_path, "output", run_name + '-samples.csv')
     df2 = pd.DataFrame(data={'sample_time': sample_times, 'tasks_completed': tasks_completed,
-                             'work_in_process': work_in_process})
+                             'work_in_process': work_in_process, 'tasks_forwarded': tasks_forwarded })
     df2.to_csv(sample_file, index=False)
     run_list.append(run_ctr)
-    (completed, wip, complexity) = get_work_counts(worker_nodes)
+    (completed, wip, complexity, forwarded) = get_work_counts(worker_nodes)
 
     final_tasks_completed.append(completed)
     final_work_in_process.append(wip)
     final_complexity_completed.append(complexity)
+    final_tasks_forwarded.append(forwarded)
 
 def store_final_results(config_name: str):
     output_file = os.path.join(experiment_path, "output", "overall-output.csv")
     df = pd.DataFrame(data={'run_num': run_list, 'tasks_completed': final_tasks_completed,
                             'work_in_process': final_work_in_process,
-                            'complexity': final_complexity_completed})
+                            'complexity': final_complexity_completed, 'tasks_forwarded': final_tasks_forwarded})
     df.to_csv(output_file, index=False)
 
 
@@ -309,6 +315,7 @@ run_list = []
 final_tasks_completed = []
 final_work_in_process = []
 final_complexity_completed = []
+final_tasks_forwarded = []
 
 # Main experiment loop
 is_first_pass = True
@@ -327,6 +334,7 @@ for run_ctr in range(1, c.num_runs + 1):
     sample_times = []
     tasks_completed = []
     work_in_process = []
+    tasks_forwarded = []
 
     # Build the simulation
     env = simpy.Environment()
