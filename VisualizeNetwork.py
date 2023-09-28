@@ -79,8 +79,8 @@ for run_ctr in range(1, c.num_runs + 1):
     run_name = f"run{run_ctr}"
     log_name = os.path.join(log_dir, run_name + '.log')
     graph_name = os.path.join(log_dir, run_name + '.png')
-    command1 = f"grep connecting {log_name} | sed -n 'p;n' | cut -d' ' -f2"
-    command2 = f"grep connecting {log_name} | sed -n 'p;n' | cut -d' ' -f6"
+    command1 = f"grep connecting {log_name} | cut -d' ' -f2"
+    command2 = f"grep connecting {log_name} | cut -d' ' -f6"
     from_nodes = read_ints_from_command(command1)
     to_nodes = read_ints_from_command(command2)
     G = nx.Graph()

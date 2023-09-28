@@ -36,6 +36,10 @@ class Task:
         self.start_time = start_time
         self.config = config
 
+    @property
+    def complexity(self):
+        return self.original_num_operations
+
 
 class WorkerNode:
     def __init__(self, config: Config, env, node_id):
@@ -45,7 +49,8 @@ class WorkerNode:
         self.operations = set()
         self.work_queue = simpy.Store(self.env)
         self.connected_nodes = []
-        self.tasks_completed = 0
+        self._tasks_completed = 0
+        self.complexity_completed = 0
         self.tasks_awaiting_forwarding = 0
         self.tasks_in_process = 0
 
@@ -58,11 +63,17 @@ class WorkerNode:
         log(f"Worker {self.node_id} accepting task {task.task_id}")
         self.work_queue.put(task)
 
-    def get_wip(self):
+    @property
+    def wip(self):
         return len(self.work_queue.items) + self.tasks_awaiting_forwarding + self.tasks_in_process
 
-    def get_tasks_completed(self):
-        return self.tasks_completed
+    @property
+    def tasks_completed(self):
+        return self._tasks_completed
+
+    @tasks_completed.setter
+    def tasks_completed(self, value):
+        self._tasks_completed = value
 
     def add_operation(self, operation):
         self.operations.add(operation)
@@ -81,6 +92,7 @@ class WorkerNode:
                 if not task.operations:
                     log(f"Task {task.task_id} completed!")
                     self.tasks_completed += 1
+                    self.complexity_completed += task.complexity
                     record_task_completion(self.env.now, task)
                 else:
                     self.add_task(task)  # Requeue it for more work
@@ -145,7 +157,7 @@ class RandomNetwork(Network):
             connections_needed = config.worker_max_connections - len(node.connected_nodes)
             if connections_needed > 0:
                 possible_connections = list(set(worker_nodes) - set(node.connected_nodes) - {node})
-                [super().connect_nodes(node, new_connection) for new_connection
+                [RandomNetwork.connect_nodes(node, new_connection) for new_connection
                  in random.sample(possible_connections, connections_needed)]
         return random.sample(worker_nodes, config.num_input_nodes)
 
@@ -160,7 +172,7 @@ def generate_tasks(config: Config, env: simpy.Environment, target_nodes: List[Wo
     while True:
         # Generate a task with a small set of randomly chosen process steps
         task = Task(config, task_id, env.now)
-        log(f"Generated task {task.task_id}")
+        log(f"Generated task {task.task_id} with complexity {task.complexity} requiring operations {task.operations}")
 
         # Assign the task to a random worker node for processing
         random.choice(target_nodes).add_task(task)
@@ -189,7 +201,7 @@ def assign_skills(config: Config, worker_nodes: List[WorkerNode]) -> None:
 
 def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[WorkerNode]):
     while True:
-        (completed, wip) = get_work_counts(worker_nodes)
+        (completed, wip, complexity) = get_work_counts(worker_nodes)
 
         sample_times.append(env.now)
         tasks_completed.append(completed)
@@ -199,13 +211,15 @@ def sample_work(config: Config, env: simpy.Environment, worker_nodes: List[Worke
         yield env.timeout(config.sample_rate)
 
 
-def get_work_counts(worker_nodes: List[WorkerNode]) -> (int, int):
+def get_work_counts(worker_nodes: List[WorkerNode]) -> (int, int, int):
     completed = 0
+    complexity_completed = 0
     wip = 0
     for node in worker_nodes:
-        wip += node.get_wip()
-        completed += node.get_tasks_completed()
-    return completed, wip
+        wip += node.wip
+        completed += node.tasks_completed
+        complexity_completed += node.complexity_completed
+    return completed, wip, complexity_completed
 
 
 def record_task_completion(completion_time, task):
@@ -243,16 +257,17 @@ def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
                              'work_in_process': work_in_process})
     df2.to_csv(sample_file, index=False)
     run_list.append(run_ctr)
-    (completed, wip) = get_work_counts(worker_nodes)
+    (completed, wip, complexity) = get_work_counts(worker_nodes)
 
     final_tasks_completed.append(completed)
     final_work_in_process.append(wip)
-
+    final_complexity_completed.append(complexity)
 
 def store_final_results(config_name: str):
     output_file = os.path.join(experiment_path, "output", "overall-output.csv")
     df = pd.DataFrame(data={'run_num': run_list, 'tasks_completed': final_tasks_completed,
-                            'work_in_process': final_work_in_process})
+                            'work_in_process': final_work_in_process,
+                            'complexity': final_complexity_completed})
     df.to_csv(output_file, index=False)
 
 
@@ -293,6 +308,7 @@ if c.seed:
 run_list = []
 final_tasks_completed = []
 final_work_in_process = []
+final_complexity_completed = []
 
 # Main experiment loop
 is_first_pass = True
