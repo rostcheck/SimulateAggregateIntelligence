@@ -142,7 +142,7 @@ class FullyConnectedNetwork(Network):
             other_nodes.remove(node)
             for other_node in other_nodes:
                 node.connect_node(other_node)
-        return worker_nodes # All nodes are inputs
+        return worker_nodes  # All nodes are inputs
 
     @staticmethod
     def route(from_node, task):
@@ -259,7 +259,7 @@ def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
 
     sample_file = os.path.join(experiment_path, "output", run_name + '-samples.csv')
     df2 = pd.DataFrame(data={'sample_time': sample_times, 'tasks_completed': tasks_completed,
-                             'work_in_process': work_in_process, 'tasks_forwarded': tasks_forwarded })
+                             'work_in_process': work_in_process, 'tasks_forwarded': tasks_forwarded})
     df2.to_csv(sample_file, index=False)
     run_list.append(run_ctr)
     (completed, wip, complexity, forwarded) = get_work_counts(worker_nodes)
@@ -269,12 +269,21 @@ def store_run_results(run_name: str, worker_nodes: List[WorkerNode]):
     final_complexity_completed.append(complexity)
     final_tasks_forwarded.append(forwarded)
 
-def store_final_results(config_name: str):
+
+def store_final_results():
     output_file = os.path.join(experiment_path, "output", "overall-output.csv")
     df = pd.DataFrame(data={'run_num': run_list, 'tasks_completed': final_tasks_completed,
                             'work_in_process': final_work_in_process,
                             'complexity': final_complexity_completed, 'tasks_forwarded': final_tasks_forwarded})
     df.to_csv(output_file, index=False)
+
+    # Calculate averages
+    output_file = os.path.join(experiment_path, "output", "output-stats.csv")
+    averages = df[["tasks_completed", "work_in_process", "tasks_forwarded"]].mean()
+    mins = df[["tasks_completed", "work_in_process", "tasks_forwarded"]].min()
+    maxes = df[["tasks_completed", "work_in_process", "tasks_forwarded"]].max()
+    df2 = pd.DataFrame({"average": averages, "min": mins, "max": maxes})
+    df2.to_csv(output_file)
 
 
 # Read configuration
@@ -370,4 +379,4 @@ for run_ctr in range(1, c.num_runs + 1):
     env.run(until=c.sim_duration)
     store_run_results(run_name, nodes)
     is_first_pass = False
-store_final_results(config_name)
+store_final_results()
